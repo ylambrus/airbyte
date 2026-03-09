@@ -65,6 +65,8 @@ If you define output topic dynamically, you might want to enable `auto.create.to
 
 **NOTICE**: a naming convention transformation will be applied to the target topic name using the `StandardNameTransformer` so that some special characters will be replaced.
 
+To force topic names to lowercase, enable the **Topic names lowercase** option (`topic_names_lowercase`, disabled by default). The lowercase conversion is applied after the naming convention transformation, so a `topic_pattern` of `Test.Topic` results in the topic `test_topic`.
+
 ### Setup the Kafka destination in Airbyte
 
 You should now have all the requirements needed to configure Kafka as a destination in the UI. You can configure the following parameters on the Kafka destination \(though many of these are optional or have default values\):
@@ -72,6 +74,7 @@ You should now have all the requirements needed to configure Kafka as a destinat
 - **Bootstrap servers**
 - **Topic pattern**
 - **Test topic**
+- **Topic names lowercase**
 - **Sync producer**
 - **Security protocol**
 - **SASL JAAS config**
@@ -141,6 +144,7 @@ This destination supports [namespaces](https://docs.airbyte.com/platform/using-a
 
 | Version | Date       | Pull Request                                             | Subject                                                                        |
 | :------ | :--------- | :------------------------------------------------------- | :----------------------------------------------------------------------------  |
+| 0.3.0   | 2026-11-20 | [TBD](https://github.com/airbytehq/airbyte/pull/TBD)     | Add `topic_names_lowercase` option to force lowercase topic names. |
 | 0.2.0   | 2026-11-10 | [90980](https://github.com/airbytehq/airbyte/pull/90980) | Add SSL certificate (mTLS) authentication with PEM certificates (Airbyte Open Source). |
 | 0.1.13  | 2026-11-04 | [91019](https://github.com/airbytehq/airbyte/pull/91019) | Update Java CDK, Kafka libraries and security dependencies. |
 | 0.1.12 | 2026-11-04 | [90997](https://github.com/airbytehq/airbyte/pull/90997) | Enable on Airbyte Cloud with TLS-only Kafka broker connections; avoid logging SASL credentials. |

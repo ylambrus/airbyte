@@ -56,6 +56,12 @@
         "type": "boolean",
         "default": false
       },
+      "topic_names_lowercase": {
+        "title": "Topic Names Lowercase",
+        "description": "When enabled, topic names will be forced to lowercase.",
+        "type": "boolean",
+        "default": false
+      },
       "protocol": {
         "title": "Protocol",
         "type": "object",

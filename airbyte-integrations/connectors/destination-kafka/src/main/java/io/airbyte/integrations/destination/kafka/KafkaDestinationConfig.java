@@ -35,14 +35,16 @@ public class KafkaDestinationConfig {
 
   private final String topicPattern;
   private final boolean sync;
+  private final boolean topicNamesLowercase;
   private final KafkaProducer<String, JsonNode> producer;
   private final List<File> temporarySslFiles;
 
   private final Thread shutdownHook;
 
-  private KafkaDestinationConfig(final String topicPattern, final boolean sync, final JsonNode config) {
+  private KafkaDestinationConfig(final String topicPattern, final boolean sync, final boolean topicNamesLowercase, final JsonNode config) {
     this.topicPattern = topicPattern;
     this.sync = sync;
+    this.topicNamesLowercase = topicNamesLowercase;
     this.temporarySslFiles = new ArrayList<>();
     this.producer = buildKafkaProducer(config);
 
@@ -54,6 +56,7 @@ public class KafkaDestinationConfig {
     return new KafkaDestinationConfig(
         config.get("topic_pattern").asText(),
         config.has("sync_producer") && config.get("sync_producer").asBoolean(),
+        config.has("topic_names_lowercase") && config.get("topic_names_lowercase").asBoolean(),
         config);
   }
 
@@ -238,6 +241,10 @@ public class KafkaDestinationConfig {
 
   public boolean isSync() {
     return sync;
+  }
+
+  public boolean isTopicNamesLowercase() {
+    return topicNamesLowercase;
   }
 
   public KafkaProducer<String, JsonNode> getProducer() {

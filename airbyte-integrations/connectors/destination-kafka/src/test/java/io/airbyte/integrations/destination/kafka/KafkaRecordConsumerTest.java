@@ -52,12 +52,22 @@ public class KafkaRecordConsumerTest extends PerStreamStateMessageTest {
   private static final String SCHEMA_NAME = "public";
   private static final String STREAM_NAME = "id_and_name";
 
+  private static final String MIXED_CASE_STREAM_NAME = "Id_And_Name";
+  private static final String MIXED_CASE_SCHEMA_NAME = "Public";
+
   private static final ConfiguredAirbyteCatalog CATALOG = new ConfiguredAirbyteCatalog().withStreams(List.of(
       CatalogHelpers.createConfiguredAirbyteStream(
           STREAM_NAME,
           SCHEMA_NAME,
           Field.of("id", JsonSchemaType.NUMBER),
           Field.of("name", JsonSchemaType.STRING))));
+
+  private static final ConfiguredAirbyteCatalog MIXED_CASE_CATALOG = new ConfiguredAirbyteCatalog().withStreams(List.of(
+          CatalogHelpers.createConfiguredAirbyteStream(
+                  MIXED_CASE_STREAM_NAME,
+                  MIXED_CASE_SCHEMA_NAME,
+                  Field.of("id", JsonSchemaType.NUMBER),
+                  Field.of("name", JsonSchemaType.STRING))));
 
   @Mock
   private Consumer<AirbyteMessage> outputRecordCollector;
@@ -68,7 +78,7 @@ public class KafkaRecordConsumerTest extends PerStreamStateMessageTest {
 
   @BeforeEach
   public void init() {
-    final KafkaDestinationConfig config = KafkaDestinationConfig.getKafkaDestinationConfig(getConfig(TOPIC_NAME));
+    final KafkaDestinationConfig config = KafkaDestinationConfig.getKafkaDestinationConfig(getConfig(TOPIC_NAME, false));
     consumer = new KafkaRecordConsumer(config, CATALOG, outputRecordCollector, NAMING_RESOLVER);
   }
 
@@ -76,13 +86,27 @@ public class KafkaRecordConsumerTest extends PerStreamStateMessageTest {
   @ArgumentsSource(TopicMapArgumentsProvider.class)
   @SuppressWarnings("unchecked")
   public void testBuildTopicMap(final String topicPattern, final String expectedTopic) {
-    final KafkaDestinationConfig config = KafkaDestinationConfig.getKafkaDestinationConfig(getConfig(topicPattern));
+    final KafkaDestinationConfig config = KafkaDestinationConfig.getKafkaDestinationConfig(getConfig(topicPattern, false));
     consumer = new KafkaRecordConsumer(config, CATALOG, outputRecordCollector, NAMING_RESOLVER);
 
     final Map<AirbyteStreamNameNamespacePair, String> topicMap = consumer.buildTopicMap();
     assertEquals(1, topicMap.size());
 
     final AirbyteStreamNameNamespacePair streamNameNamespacePair = new AirbyteStreamNameNamespacePair(STREAM_NAME, SCHEMA_NAME);
+    assertEquals(expectedTopic, topicMap.get(streamNameNamespacePair));
+  }
+
+  @ParameterizedTest
+  @ArgumentsSource(TopicMapLowercaseArgumentsProvider.class)
+  @SuppressWarnings("unchecked")
+  public void testBuildTopicMapWithLowercase(final String topicPattern, final String expectedTopic) {
+    final KafkaDestinationConfig config = KafkaDestinationConfig.getKafkaDestinationConfig(getConfig(topicPattern, true));
+    consumer = new KafkaRecordConsumer(config, MIXED_CASE_CATALOG, outputRecordCollector, NAMING_RESOLVER);
+
+    final Map<AirbyteStreamNameNamespacePair, String> topicMap = consumer.buildTopicMap();
+    assertEquals(1, topicMap.size());
+
+    final AirbyteStreamNameNamespacePair streamNameNamespacePair = new AirbyteStreamNameNamespacePair(MIXED_CASE_STREAM_NAME, MIXED_CASE_SCHEMA_NAME);
     assertEquals(expectedTopic, topicMap.get(streamNameNamespacePair));
   }
 
@@ -101,7 +125,7 @@ public class KafkaRecordConsumerTest extends PerStreamStateMessageTest {
     consumer.close();
   }
 
-  private JsonNode getConfig(final String topicPattern) {
+  private JsonNode getConfig(final String topicPattern, final boolean topicNamesLowercase) {
     return getConfigWithProtocol(topicPattern, KafkaProtocol.PLAINTEXT);
   }
 
@@ -127,6 +151,9 @@ public class KafkaRecordConsumerTest extends PerStreamStateMessageTest {
         .put("topic_pattern", topicPattern)
         .put("sync_producer", true)
         .put("protocol", protocolConfig)
+        .put("topic_names_lowercase", topicNamesLowercase)
+        .put("sasl_jaas_config", "")
+        .put("sasl_mechanism", "PLAIN")
         .put("client_id", "test-client")
         .put("acks", "all")
         .put("transactional_id", "txn-id")
@@ -253,6 +280,20 @@ public class KafkaRecordConsumerTest extends PerStreamStateMessageTest {
           Arguments.of("{namespace}.{stream}." + TOPIC_NAME, "public_id_and_name_test_topic"),
           Arguments.of("{namespace}-{stream}-" + TOPIC_NAME, "public_id_and_name_test_topic"),
           Arguments.of("topic with spaces", "topic_with_spaces"));
+    }
+
+  }
+
+  public static class TopicMapLowercaseArgumentsProvider implements ArgumentsProvider {
+
+    @Override
+    public Stream<? extends Arguments> provideArguments(final ExtensionContext context) {
+      return Stream.of(
+              Arguments.of("Test.Topic", "test_topic"),
+              Arguments.of("{namespace}", "public"),
+              Arguments.of("{stream}", "id_and_name"),
+              Arguments.of("{namespace}.{stream}.Test.Topic", "public_id_and_name_test_topic"),
+              Arguments.of("UPPER_CASE_TOPIC", "upper_case_topic"));
     }
 
   }

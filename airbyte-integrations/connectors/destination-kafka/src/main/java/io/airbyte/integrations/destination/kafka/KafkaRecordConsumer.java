@@ -30,6 +30,7 @@ public class KafkaRecordConsumer extends FailureTrackingAirbyteMessageConsumer {
   private static final Logger LOGGER = LoggerFactory.getLogger(KafkaRecordConsumer.class);
 
   private final String topicPattern;
+  private final boolean topicNamesLowercase;
   private final Map<AirbyteStreamNameNamespacePair, String> topicMap;
   private final KafkaProducer<String, JsonNode> producer;
   private final KafkaDestinationConfig config;
@@ -43,6 +44,7 @@ public class KafkaRecordConsumer extends FailureTrackingAirbyteMessageConsumer {
                              final Consumer<AirbyteMessage> outputRecordCollector,
                              final NamingConventionTransformer nameTransformer) {
     this.topicPattern = kafkaDestinationConfig.getTopicPattern();
+    this.topicNamesLowercase = kafkaDestinationConfig.isTopicNamesLowercase();
     this.topicMap = new HashMap<>();
     this.producer = kafkaDestinationConfig.getProducer();
     this.config = kafkaDestinationConfig;
@@ -84,9 +86,12 @@ public class KafkaRecordConsumer extends FailureTrackingAirbyteMessageConsumer {
     return catalog.getStreams().stream()
         .map(stream -> AirbyteStreamNameNamespacePair.fromAirbyteStream(stream.getStream()))
         .collect(Collectors.toMap(Function.identity(),
-            pair -> nameTransformer.getIdentifier(topicPattern
-                .replaceAll("\\{namespace}", Optional.ofNullable(pair.getNamespace()).orElse(""))
-                .replaceAll("\\{stream}", Optional.ofNullable(pair.getName()).orElse("")))));
+            pair -> {
+              String topic = nameTransformer.getIdentifier(topicPattern
+                      .replaceAll("\\{namespace}", Optional.ofNullable(pair.getNamespace()).orElse(""))
+                      .replaceAll("\\{stream}", Optional.ofNullable(pair.getName()).orElse("")));
+              return topicNamesLowercase ? topic.toLowerCase() : topic;
+            }));
   }
 
   private void sendRecord(final ProducerRecord<String, JsonNode> record) {

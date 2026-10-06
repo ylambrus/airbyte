@@ -2,7 +2,10 @@
 
 """Shared helpers for `source-gong` unit tests."""
 
+import importlib
+import sys
 from pathlib import Path
+from types import ModuleType
 
 from airbyte_cdk.sources.declarative.yaml_declarative_source import YamlDeclarativeSource
 from airbyte_cdk.test.catalog_builder import CatalogBuilder
@@ -23,6 +26,17 @@ def _get_manifest_path() -> Path:
 
 
 _MANIFEST_PATH = _get_manifest_path() / "manifest.yaml"
+
+# The manifest references `source_declarative_manifest.components.*`. Outside the connector image
+# the CDK falls back to importing `components`, so the directory holding `components.py` must be
+# importable.
+if str(_get_manifest_path()) not in sys.path:
+    sys.path.append(str(_get_manifest_path()))
+
+
+def load_components() -> ModuleType:
+    """Import the connector's `components.py`, the same module instance the manifest resolves to."""
+    return importlib.import_module("components")
 
 
 def get_source(config, state=None) -> YamlDeclarativeSource:

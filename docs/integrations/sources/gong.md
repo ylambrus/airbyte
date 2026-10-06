@@ -61,6 +61,12 @@ You can authenticate to Gong using one of two methods: OAuth 2.0 or an API key.
 - **Lookback Window (days)** (optional). Number of days to subtract from the saved state at the start of each incremental sync. The default is 0 (sync strictly forward). Set this if calls or scorecards are updated after they were first replicated and you want later syncs to pick up those changes.
 
 </FieldAnchor>
+
+<FieldAnchor field="pii_redaction">
+
+- **PII Redaction** (optional). Rules that remove or pseudonymize personal data inside the connector, before records reach the destination. Each rule applies an action (`remove`, `nullify`, `mask`, `hash`, `redact_text` or `keep`) to the fields matched by its paths, optionally limited to some streams. Paths are dotted and traverse arrays automatically: `parties.emailAddress` matches the email of every call participant, and `**.phoneNumber` matches a phone number at any depth. The `hash` action requires a **Hash Key** of at least 16 characters. After changing the rules, refresh the source schema: removed fields disappear from it and hashed or masked fields become strings.
+
+</FieldAnchor>
 <HideInUI>
 
 ## Supported sync modes
@@ -87,6 +93,69 @@ This source syncs the following streams:
 
 Starting with version 1.1.0, the connector excludes calls marked as private (`isPrivate: true` in the Gong API) from the `calls` and `extensive calls` streams. Because `call transcripts` is a substream of `calls`, transcripts for private calls are also excluded. Gong requires this behavior for OAuth app listing approval, and the Gong API does not expose a server-side filter for this field, so the connector applies the filter client-side after fetching records.
 
+### PII redaction
+
+Starting with version 1.5.0, the connector can remove or pseudonymize personal data before records leave the connector, so it never reaches the destination, its raw tables or its logs. Configure it with the optional **PII Redaction** setting: a list of rules, plus the **Hash Key** used by the `hash` action and the **Mask Value** used by the `mask` action. Without rules, records are emitted unchanged.
+
+Each rule has an action, one or more field paths and, optionally, the streams it applies to (all streams when empty).
+
+| Action | Effect |
+| :----- | :----- |
+| `remove` | Deletes the matched field or array element. |
+| `nullify` | Sets the matched field to `null`. |
+| `mask` | Replaces every value under the matched field with the mask value (default `[REDACTED]`). |
+| `hash` | Replaces every value under the matched field with its HMAC-SHA256 hex digest, keyed with the hash key. Strings are trimmed and lowercased first, so the same email hashes to the same value in every stream and can still be used to join them. |
+| `redact_text` | Replaces personal data found inside strings: `email`, `phone`, `credit_card` (Luhn-checked), `iban` (checksum-verified) and `ip_address`, as `[EMAIL]`, `[PHONE]` and so on. Choose a subset with **Text Detectors** and add regular expressions with **Custom Patterns**. |
+| `keep` | Switches the stream to allowlist mode: only the fields matched by `keep` rules are emitted, plus the primary key and cursor. Other rules still apply to the kept fields. Use it to make sure that fields Gong adds in the future are not synced until you allow them. |
+
+`mask`, `hash` and `redact_text` apply to every value under the matched field and keep the shape of objects and arrays. When several rules match the same value, the strongest action wins, in the order `remove`, `nullify`, `mask`, `hash`, `redact_text`, regardless of the order of the rules. Primary key and cursor fields are never modified, because that would break deduplication and incremental syncs; the connector logs a warning when a rule matches one. The private-call filter always runs on the original record, so rules cannot cause private calls to be synced.
+
+Field paths use the following syntax:
+
+| Path | Matches |
+| :--- | :------ |
+| `parties.emailAddress` | `emailAddress` of every element of the `parties` array. Arrays are traversed automatically. |
+| `parties[*].emailAddress` or `parties.*.emailAddress` | The same, with an explicit array wildcard. |
+| `parties[0].emailAddress` | Only the first participant. |
+| `**.phoneNumber` | A `phoneNumber` key at any depth, including the top level. |
+| `media.*Url`, `email*` | Keys matching a glob pattern (`*`, `?`, `[abc]`). Matching is case-sensitive. |
+| `a\.b` | A key whose name contains a dot. |
+
+Paths that match nothing are ignored. When a rule limited to a stream has a path that matches no field of that stream's schema, the connector logs a warning, since the path is likely a typo.
+
+The discovered schema reflects the rules: removed and non-kept fields disappear, nullified fields become nullable and hashed or masked scalar fields become strings. Refresh the source schema after changing the rules. Rules only apply to new syncs: to redact data that was already replicated, clear the affected streams and resync them.
+
+The following configuration is a reasonable starting point. It hashes email addresses everywhere so that calls can still be joined with users, removes names, phone numbers, recording URLs and CRM context, and scrubs contact details from free text such as call briefs, comments, transcripts and scorecard answers. Note that it removes `parties.name` rather than `**.name`, which would also remove tracker and topic names.
+
+```json
+{
+  "pii_redaction": {
+    "hash_key": "<a secret of at least 16 characters>",
+    "rules": [
+      { "action": "hash", "paths": ["**.emailAddress", "**.emailAliases", "**.trustedEmailAddress"] },
+      {
+        "action": "remove",
+        "paths": [
+          "parties.name", "**.firstName", "**.lastName", "**.phoneNumber", "**.extension",
+          "media", "**.meetingUrl", "**.personalMeetingUrls", "**.meetingConsentPageUrl", "**.context"
+        ]
+      },
+      {
+        "action": "redact_text",
+        "paths": ["title", "metaData.title", "content", "collaboration", "transcript.sentences.text", "answers.answerText"]
+      }
+    ]
+  }
+}
+```
+
+Keep the following limitations in mind:
+
+- `redact_text` relies on patterns, so it does not detect names, addresses or contact details spelled out in speech-to-text transcripts (such as "john dot doe at acme dot com"). If transcripts or call summaries are not needed, `remove` them. Otherwise, apply a named-entity recognition step downstream.
+- The phone detector treats any group of 9 to 15 digits (8 with an international prefix) as a phone number, so it may also redact some large numbers.
+- Hashed values are pseudonymized, not anonymized: anyone with the hash key can test guesses. Store the key as a secret and keep it stable, because changing it changes every hashed value.
+- When the connector runs in debug mode, the HTTP responses it logs are not redacted.
+
 ### Performance considerations
 
 Gong limits API access to 3 calls per second and 10,000 calls per day. If you exceed either limit, the API returns HTTP status code 429 with a `Retry-After` header indicating how long to wait.
@@ -111,6 +180,7 @@ If you use Airbyte Cloud and your organization restricts access to specific IPs,
 
 | Version | Date | Pull Request | Subject |
 | :--- | :--- | :--- | :--- |
+| 1.5.0 | 2026-10-06 | [fork](https://github.com/ylambrus/airbyte/tree/feat/gong-pii-redaction) | Add configurable PII redaction: remove, nullify, mask, hash, text scrubbing and allowlist rules on any nested field, reflected in the discovered schema |
 | 1.4.4 | 2026-10-06 | [87873](https://github.com/airbytehq/airbyte/pull/87873) | Update dependencies |
 | 1.4.3 | 2026-09-29 | [87189](https://github.com/airbytehq/airbyte/pull/87189) | Update dependencies |
 | 1.4.2 | 2026-09-22 | [86644](https://github.com/airbytehq/airbyte/pull/86644) | Update dependencies |

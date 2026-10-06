@@ -74,3 +74,22 @@ Two 1.4.0 areas were evaluated against the breaking-change checklist; both ship 
 
 - **`pointsOfInterest` retained despite upstream deletion** — Gong removed the field from `/v2/calls/extensive` in January 2025 (deadline 2025-01-23, tracked in oncall#10402; Gong's release notes and deprecations articles are linked from `metadata.yaml` `externalDocumentationUrls`). A live probe on 2026-08-30 confirmed 0 of 100 recent calls return the field — the column has been null since January 2025. The field stays in the request body and the `extensiveCalls` schema so existing destination columns are preserved; removing it is deferred to a future MAJOR version with a declared breaking change.
 - **Unset `start_date` scope** — a `ConfigMigration` in the spec pins `start_date: 1970-01-01T00:00:00Z` onto any config that omits it, so no connection's data scope changes. Note the consequence: the migration applies to all configs (new ones included), so unset-start-date behavior remains "sync all history" for everyone; the manifest's two-years fallback in `start_datetime` is defense in depth and is not reachable in normal operation.
+
+## PII redaction
+
+PII redaction is implemented in `components.py` and configured by the optional `pii_redaction` spec property. The user-facing reference (path syntax, actions, examples, limitations) lives in `docs/integrations/sources/gong.md`.
+
+- `PiiRedactionTransformation` redacts records and `PiiRedactionSchemaLoader` adapts the discovered schema. Both build a `RedactionPolicy` from the config, and the schema loader runs the same matcher on a skeleton document built from the schema, so discovery cannot drift from the emitted records.
+- Invalid rules raise a `config_error` when the streams are built, so they fail the connection check rather than a sync.
+
+Every stream must satisfy the following invariants, which `unit_tests/test_pii_redaction_manifest.py` enforces. A stream that misses them would emit unredacted data.
+
+| Invariant | Why |
+| --- | --- |
+| `$parameters.pii_stream_name` is the stream name | Rules are scoped by stream name. |
+| `$parameters.pii_protected_fields` is the primary key plus the cursor field | Rules never modify these, so deduplication and incremental state keep working. |
+| `#/definitions/pii_redaction_transformation` is the last transformation | Transformations such as `AddFields` derive the primary key and cursor from fields that rules may remove. |
+| The schema loader is `#/definitions/pii_redaction_schema_loader` wrapping the inline schema | The discovered schema matches the redacted records. |
+| The stream name is listed in the `streams` enum of the rule spec | Users can scope rules to it. |
+
+Compliance record filters (the `isPrivate` filters on `calls` and `extensiveCalls`) set `transform_before_filtering: false` so that redaction rules can never hide the fields they read. `callTranscripts` is client-side incremental, so it transforms before filtering; its cursor `started` is protected.

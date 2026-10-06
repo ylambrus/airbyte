@@ -12,6 +12,10 @@ definitions:
     users:
       type: DeclarativeStream
       name: users
+      $parameters:
+        pii_stream_name: users
+        pii_protected_fields:
+          - id
       primary_key:
         - id
       retriever:
@@ -57,13 +61,22 @@ definitions:
             page_size: 100
             cursor_value: "{{ response.records.cursor }}"
             stop_condition: "{{ 'records' not in response }}"
+      transformations:
+        - $ref: "#/definitions/pii_redaction_transformation"
       schema_loader:
-        type: InlineSchemaLoader
-        schema:
-          $ref: "#/schemas/users"
+        $ref: "#/definitions/pii_redaction_schema_loader"
+        schema_loader:
+          type: InlineSchemaLoader
+          schema:
+            $ref: "#/schemas/users"
     calls:
       type: DeclarativeStream
       name: calls
+      $parameters:
+        pii_stream_name: calls
+        pii_protected_fields:
+          - id
+          - started
       primary_key:
         - id
       retriever:
@@ -95,6 +108,8 @@ definitions:
           record_filter:
             type: RecordFilter
             condition: "{{ not record.get('isPrivate', False) }}"
+          # Filter on the raw record so PII redaction rules can never hide `isPrivate`.
+          transform_before_filtering: false
         paginator:
           type: DefaultPaginator
           page_token_option:
@@ -122,13 +137,22 @@ definitions:
           type: RequestOption
           inject_into: request_parameter
           field_name: fromDateTime
+      transformations:
+        - $ref: "#/definitions/pii_redaction_transformation"
       schema_loader:
-        type: InlineSchemaLoader
-        schema:
-          $ref: "#/schemas/calls"
+        $ref: "#/definitions/pii_redaction_schema_loader"
+        schema_loader:
+          type: InlineSchemaLoader
+          schema:
+            $ref: "#/schemas/calls"
     extensiveCalls:
       type: DeclarativeStream
       name: extensiveCalls
+      $parameters:
+        pii_stream_name: extensiveCalls
+        pii_protected_fields:
+          - id
+          - startdatetime
       primary_key:
         - id
       retriever:
@@ -196,6 +220,8 @@ definitions:
           record_filter:
             type: RecordFilter
             condition: "{{ not record.get('metaData', {}).get('isPrivate', False) }}"
+          # Filter on the raw record so PII redaction rules can never hide `metaData.isPrivate`.
+          transform_before_filtering: false
         paginator:
           type: DefaultPaginator
           page_token_option:
@@ -239,13 +265,20 @@ definitions:
             - path:
                 - startdatetime
               value: "{{ record['metaData']['started'] }}"
+        - $ref: "#/definitions/pii_redaction_transformation"
       schema_loader:
-        type: InlineSchemaLoader
-        schema:
-          $ref: "#/schemas/extensiveCalls"
+        $ref: "#/definitions/pii_redaction_schema_loader"
+        schema_loader:
+          type: InlineSchemaLoader
+          schema:
+            $ref: "#/schemas/extensiveCalls"
     scorecards:
       type: DeclarativeStream
       name: scorecards
+      $parameters:
+        pii_stream_name: scorecards
+        pii_protected_fields:
+          - scorecardId
       primary_key:
         - scorecardId
       retriever:
@@ -291,13 +324,22 @@ definitions:
             page_size: 100
             cursor_value: "{{ response.records.cursor }}"
             stop_condition: "{{ 'records' not in response }}"
+      transformations:
+        - $ref: "#/definitions/pii_redaction_transformation"
       schema_loader:
-        type: InlineSchemaLoader
-        schema:
-          $ref: "#/schemas/scorecards"
+        $ref: "#/definitions/pii_redaction_schema_loader"
+        schema_loader:
+          type: InlineSchemaLoader
+          schema:
+            $ref: "#/schemas/scorecards"
     answeredScorecards:
       type: DeclarativeStream
       name: answeredScorecards
+      $parameters:
+        pii_stream_name: answeredScorecards
+        pii_protected_fields:
+          - answeredScorecardId
+          - reviewTime
       primary_key:
         - answeredScorecardId
       retriever:
@@ -361,13 +403,22 @@ definitions:
           field_path:
             - filter
             - reviewFromDate
+      transformations:
+        - $ref: "#/definitions/pii_redaction_transformation"
       schema_loader:
-        type: InlineSchemaLoader
-        schema:
-          $ref: "#/schemas/answeredScorecards"
+        $ref: "#/definitions/pii_redaction_schema_loader"
+        schema_loader:
+          type: InlineSchemaLoader
+          schema:
+            $ref: "#/schemas/answeredScorecards"
     callTranscripts:
       type: DeclarativeStream
       name: callTranscripts
+      $parameters:
+        pii_stream_name: callTranscripts
+        pii_protected_fields:
+          - callId
+          - started
       primary_key:
         - callId
       retriever:
@@ -455,10 +506,23 @@ definitions:
               # record's own call by its callId so every transcript keeps its
               # real call start time instead of a single batch-wide value.
               value: "{{ stream_slice.extra_fields['started'][stream_slice.partition['call_id'].index(record['callId'])] }}"
+        - $ref: "#/definitions/pii_redaction_transformation"
       schema_loader:
-        type: InlineSchemaLoader
-        schema:
-          $ref: "#/schemas/callTranscripts"
+        $ref: "#/definitions/pii_redaction_schema_loader"
+        schema_loader:
+          type: InlineSchemaLoader
+          schema:
+            $ref: "#/schemas/callTranscripts"
+  # PII redaction (see components.py). Every stream declares `pii_stream_name` and
+  # `pii_protected_fields` (primary key and cursor, never modified) in its `$parameters`,
+  # runs the transformation last and wraps its schema loader so discovery matches the
+  # redacted records.
+  pii_redaction_transformation:
+    type: CustomTransformation
+    class_name: source_declarative_manifest.components.PiiRedactionTransformation
+  pii_redaction_schema_loader:
+    type: CustomSchemaLoader
+    class_name: source_declarative_manifest.components.PiiRedactionSchemaLoader
   auth_error_filter:
     type: HttpResponseFilter
     action: FAIL
@@ -663,6 +727,133 @@ spec:
         default: 0
         minimum: 0
         order: 3
+      pii_redaction:
+        type: object
+        title: PII Redaction
+        description: >-
+          Remove or pseudonymize personal data inside the connector, before
+          records reach the destination. Rules address any field at any depth
+          with dotted paths and are reflected in the discovered schema. Leave
+          empty to sync records unchanged.
+        order: 4
+        properties:
+          rules:
+            type: array
+            title: Rules
+            description: >-
+              Each rule applies one action to the fields matched by its paths.
+              When several rules match the same value, the strongest action
+              wins (remove > nullify > mask > hash > redact_text). Primary key
+              and cursor fields are never modified.
+            order: 0
+            items:
+              type: object
+              title: Rule
+              required:
+                - action
+                - paths
+              properties:
+                action:
+                  type: string
+                  title: Action
+                  description: >-
+                    `remove` deletes the field. `nullify` sets it to null.
+                    `mask` replaces every value with the mask value. `hash`
+                    replaces every value with a keyed HMAC-SHA256 hex digest
+                    (trimmed and lowercased first, so hashes can be joined across
+                    streams). `redact_text` replaces emails, phone numbers, card
+                    numbers, IBANs and IP addresses found inside strings. `keep`
+                    switches the stream to allowlist mode: only the fields
+                    matched by `keep` rules (plus the primary key and cursor)
+                    are emitted. Values under a matched object or array are all
+                    affected.
+                  enum:
+                    - remove
+                    - nullify
+                    - mask
+                    - hash
+                    - redact_text
+                    - keep
+                  order: 0
+                paths:
+                  type: array
+                  title: Field Paths
+                  description: >-
+                    Dotted paths of the fields to match. Arrays are traversed
+                    automatically (`parties.emailAddress` matches the email of
+                    every participant), `**` matches any depth
+                    (`**.phoneNumber`), `*` matches any key or array element,
+                    `[n]` selects one array element and `\.` escapes a dot in a
+                    key name.
+                  items:
+                    type: string
+                  minItems: 1
+                  examples:
+                    - parties.emailAddress
+                    - "**.phoneNumber"
+                    - transcript.sentences.text
+                  order: 1
+                streams:
+                  type: array
+                  title: Streams
+                  description: >-
+                    Streams this rule applies to. Leave empty to apply it to
+                    every stream.
+                  items:
+                    type: string
+                    enum:
+                      - answeredScorecards
+                      - callTranscripts
+                      - calls
+                      - extensiveCalls
+                      - scorecards
+                      - users
+                  uniqueItems: true
+                  order: 2
+                detectors:
+                  type: array
+                  title: Text Detectors
+                  description: >-
+                    Only used by `redact_text`: the kinds of personal data to
+                    replace. Leave empty to use all of them.
+                  items:
+                    type: string
+                    enum:
+                      - email
+                      - phone
+                      - credit_card
+                      - iban
+                      - ip_address
+                  uniqueItems: true
+                  order: 3
+                custom_patterns:
+                  type: array
+                  title: Custom Patterns
+                  description: >-
+                    Only used by `redact_text`: additional regular expressions
+                    (Python syntax) whose matches are replaced with the mask
+                    value.
+                  items:
+                    type: string
+                  order: 4
+          hash_key:
+            type: string
+            title: Hash Key
+            description: >-
+              Secret key of the `hash` action (at least 16 characters). Hashes
+              are only reproducible with the same key, so keep it stable:
+              changing it changes every hashed value.
+            airbyte_secret: true
+            minLength: 16
+            order: 1
+          mask_value:
+            type: string
+            title: Mask Value
+            description: >-
+              Replacement used by the `mask` action and by custom patterns of
+              `redact_text`.
+            default: "[REDACTED]"
+            order: 2
     additionalProperties: true
   advanced_auth:
     auth_flow_type: oauth2.0
